@@ -1,6 +1,6 @@
-
 import { useState, useEffect, useMemo } from "react";
 import emailjs from "@emailjs/browser";
+import JSZip from "jszip";
 import {
   Calendar, User, Mail, Phone, CheckCircle2, AlertCircle, Info,
   Lock, ShieldCheck, RotateCcw, X, Loader2, Download, Search,
@@ -172,16 +172,24 @@ function logoExtension(dataUrl) {
   return match ? match[1].replace("jpeg", "jpg") : "png";
 }
 
-function downloadAllLogos(apps) {
+async function downloadAllLogosZip(apps) {
   const withLogo = (apps || []).filter((a) => a.companyLogo);
+  if (withLogo.length === 0) return 0;
+  const zip = new JSZip();
   withLogo.forEach((a, i) => {
-    setTimeout(() => {
-      downloadDataUrl(
-        a.companyLogo,
-        `${(a.companyName || "logo").replace(/[^\w.-]+/g, "_")}_${i + 1}.${logoExtension(a.companyLogo)}`
-      );
-    }, i * 400);
+    const base64 = (a.companyLogo.split(",")[1] || "");
+    const filename = `${(a.companyName || "logo").replace(/[^\w.-]+/g, "_")}_${i + 1}.${logoExtension(a.companyLogo)}`;
+    zip.file(filename, base64, { base64: true });
   });
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "vietbaby_vietedu_logos.zip";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
   return withLogo.length;
 }
 
@@ -376,8 +384,9 @@ function Field({ kr, en, required, hint, hintEn, children }) {
       </span>
       {children}
       {hint && (
-        <span style={{ display: "block", fontSize: 11.5, color: MUTED, marginTop: 4 }}>
-          {hint}{hintEn && <span> · {hintEn}</span>}
+        <span style={{ display: "block", fontSize: 11.5, color: MUTED, marginTop: 4, lineHeight: 1.6 }}>
+          {hint}
+          {hintEn && <><br />{hintEn}</>}
         </span>
       )}
     </label>
@@ -507,6 +516,11 @@ export default function App() {
 
   async function updateAppTime(id, day, startTime) {
     const next = (apps || []).map((a) => (a.id === id ? { ...a, day, startTime } : a));
+    await persist(next);
+  }
+
+  async function updateAppFields(id, fields) {
+    const next = (apps || []).map((a) => (a.id === id ? { ...a, ...fields } : a));
     await persist(next);
   }
 
@@ -691,7 +705,7 @@ export default function App() {
             blockError={blockError} addSpecialBlock={addSpecialBlock}
             blockedForm={blockedForm} setBlockedForm={setBlockedForm}
             blockedError={blockedError} addBlockedTime={addBlockedTime}
-            deleteApp={deleteApp} changeAccessCode={changeAccessCode} updateAppTime={updateAppTime}
+            deleteApp={deleteApp} changeAccessCode={changeAccessCode} updateAppTime={updateAppTime} updateAppFields={updateAppFields}
           />
         )}
 
@@ -745,9 +759,10 @@ function Footer({ view, setView }) {
       {view !== "admin" && (
         <button
           onClick={() => setView("admin")}
-          style={{ cursor: "pointer", background: "none", border: "none", fontSize: 12.5, color: MUTED, fontFamily: SANS }}
+          style={{ cursor: "pointer", background: "none", border: "none", fontSize: 12.5, color: MUTED, fontFamily: SANS, lineHeight: 1.6 }}
         >
-          주최자이신가요? 신청 내역 관리 → <span style={{ fontSize: 11 }}>Organizer? Manage applications →</span>
+          주최자이신가요? 신청 내역 관리 →<br />
+          <span style={{ fontSize: 11 }}>Organizer? Manage applications →</span>
         </button>
       )}
     </footer>
@@ -1056,7 +1071,7 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
 }
 
 function LookupView({ apps, startEdit }) {
-  const [refInput, setRefInput] = useState("");
+  const [boothInput, setBoothInput] = useState("");
   const [emailInput, setEmailInput] = useState("");
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
@@ -1065,17 +1080,17 @@ function LookupView({ apps, startEdit }) {
     e.preventDefault();
     setError("");
     setResult(null);
-    const code = refInput.trim().toUpperCase();
+    const booth = boothInput.trim().toLowerCase();
     const email = emailInput.trim().toLowerCase();
-    if (!code || !email) {
-      setError("접수 번호와 이메일을 모두 입력해주세요. Please enter both the reference code and email.");
+    if (!booth || !email) {
+      setError("부스 번호와 이메일을 모두 입력해주세요. Please enter both the booth number and email.");
       return;
     }
     const found = (apps || []).find(
-      (a) => !a.isSpecial && refCode(a.id) === code && (a.picEmail || "").toLowerCase() === email
+      (a) => !a.isSpecial && (a.boothNo || "").trim().toLowerCase() === booth && (a.picEmail || "").toLowerCase() === email
     );
     if (!found) {
-      setError("일치하는 신청 내역을 찾을 수 없습니다. 접수번호와 이메일을 확인해주세요. No matching application found — please check your reference code and email.");
+      setError("일치하는 신청 내역을 찾을 수 없습니다. 부스 번호와 이메일을 확인해주세요. No matching application found — please check your booth number and email.");
       return;
     }
     setResult(found);
@@ -1087,10 +1102,14 @@ function LookupView({ apps, startEdit }) {
       <p style={{ fontSize: 12.5, color: MUTED, margin: "0 0 20px" }}>My Application</p>
 
       <form onSubmit={handleLookup}>
-        <Field kr="접수 번호" en="Reference Code" required hint="접수 완료 화면에서 확인하신 번호입니다." hintEn="Shown on your submission confirmation screen.">
-          <TextInput value={refInput} onChange={(e) => setRefInput(e.target.value)} placeholder="VB2026-XXXXX" />
+        <Field kr="부스 번호" en="Booth Number" required>
+          <TextInput value={boothInput} onChange={(e) => setBoothInput(e.target.value)} placeholder="A-102" />
         </Field>
-        <Field kr="담당자 이메일" en="Email" required>
+        <Field
+          kr="담당자 이메일" en="Email" required
+          hint="세션 접수 때 기재해주신 메일을 기재해주셔야 조회가 가능합니다."
+          hintEn="Enter the same email you used when submitting the session — otherwise the lookup won't find it."
+        >
           <TextInput value={emailInput} onChange={(e) => setEmailInput(e.target.value)} placeholder="name@company.com" />
         </Field>
         {error && (
@@ -1108,7 +1127,6 @@ function LookupView({ apps, startEdit }) {
 
       {result && (
         <div style={{ marginTop: 24, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "18px 20px", background: "#FAFAFC" }}>
-          <Row kr="접수 번호" en="Reference" value={refCode(result.id)} mono />
           <Row kr="행사 구분" en="Fair type" value={TRACKS[result.track] ? `${TRACKS[result.track].kr} / ${TRACKS[result.track].en}` : "-"} />
           <Row kr="업체명" en="Company" value={result.companyName} />
           <Row kr="부스 번호" en="Booth" value={result.boothNo} />
@@ -1167,7 +1185,6 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
         <p style={{ fontSize: 14, color: MUTED, marginBottom: 4 }}>담당자 확인 후 최종 시간대가 확정되며, 결과는 기재하신 이메일로 안내드립니다.</p>
         <p style={{ fontSize: 12.5, color: MUTED, marginBottom: 20 }}>The organizer will review and confirm the final time; you'll be notified by email.</p>
         <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "18px 20px", background: "#F1F4F9" }}>
-          <Row kr="접수 번호" en="Reference" value={refCode(confirmation.id)} mono />
           <Row kr="행사 구분" en="Fair type" value={TRACKS[confirmation.track] ? `${TRACKS[confirmation.track].kr} / ${TRACKS[confirmation.track].en}` : "-"} />
           <Row kr="업체명" en="Company" value={confirmation.companyName} />
           <Row kr="부스 번호" en="Booth" value={confirmation.boothNo} />
@@ -1207,14 +1224,14 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
       <div style={{ border: `1px solid ${NOTICE_BORDER}`, borderRadius: 6, padding: "18px 20px", background: PAPER_2, fontSize: 13, color: INK, marginBottom: 28 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
           <Info size={16} style={{ flexShrink: 0, color: NOTICE_ICON }} />
-          <strong style={{ fontSize: 13.5 }}>신청 마감: 2026년 9월 14일 · Deadline: Sep 14, 2026</strong>
+          <strong style={{ fontSize: 13.5, color: LACQUER }}>신청 마감: 2026년 9월 14일 · Deadline: Sep 14, 2026</strong>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <NoticeItem n="1" kr="발표자료는 USB에 저장하여 지참해주세요." en="Bring your slides on a USB drive." />
           <NoticeItem
             n="2"
-            kr={<>모든 세션은 <strong>45분</strong>이며, 앞뒤 세션과 <strong>15분 간격</strong>이 자동으로 확보됩니다.</>}
-            en={<>Every session is a fixed <strong>45 minutes</strong>, and a <strong>15-minute gap</strong> from neighboring sessions is enforced automatically.</>}
+            kr={<>모든 세션은 <strong style={{ color: LACQUER }}>45분</strong>이며, 앞뒤 세션과 <strong style={{ color: LACQUER }}>15분 간격</strong>이 자동으로 확보됩니다.</>}
+            en={<>Every session is a fixed <strong style={{ color: LACQUER }}>45 minutes</strong>, and a <strong style={{ color: LACQUER }}>15-minute gap</strong> from neighboring sessions is enforced automatically.</>}
           />
           <NoticeItem n="3" kr="모든 정보는 영문 또는 베트남어로 작성해주세요." en="Please fill in all information in English or Vietnamese." />
           <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -1408,7 +1425,7 @@ function AdminGate({ passInput, setPassInput, passError, onSubmit }) {
 
 function AdminView({
   apps, allApps, statusFilter, setStatusFilter, setAppStatus, blockForm, setBlockForm, blockError, addSpecialBlock,
-  blockedForm, setBlockedForm, blockedError, addBlockedTime, deleteApp, changeAccessCode, updateAppTime,
+  blockedForm, setBlockedForm, blockedError, addBlockedTime, deleteApp, changeAccessCode, updateAppTime, updateAppFields,
 }) {
   const [adminTab, setAdminTab] = useState("applications");
   const [confirmedOnly, setConfirmedOnly] = useState(true);
@@ -1416,6 +1433,9 @@ function AdminView({
   const [editDay, setEditDay] = useState("");
   const [editStart, setEditStart] = useState("");
   const [logoDownloadMsg, setLogoDownloadMsg] = useState("");
+  const [boothQuery, setBoothQuery] = useState("");
+  const [editingContentId, setEditingContentId] = useState(null);
+  const [contentDraft, setContentDraft] = useState({});
   const filters = [
     { key: "all", kr: "전체", en: "All" },
     { key: "pending", kr: "검토중", en: "Pending" },
@@ -1424,8 +1444,10 @@ function AdminView({
   ];
   const tabs = [
     { key: "applications", kr: "신청 내역 관리", en: "Applications" },
+    { key: "boothSearch", kr: "부스 검색", en: "Booth Search" },
     { key: "longForm", kr: "장시간 일정 등록", en: "Long-form Schedule" },
     { key: "blockSlot", kr: "스테이지 시간 추가", en: "Add Stage Time" },
+    { key: "unavailable", kr: "이용불가", en: "Unavailable" },
     { key: "settings", kr: "설정", en: "Settings" },
   ];
   const blockedItems = (allApps || [])
@@ -1444,6 +1466,9 @@ function AdminView({
   const stalePending = realApps.filter(
     (a) => a.status === "pending" && (now - new Date(a.submittedAt)) / 86400000 >= STALE_PENDING_DAYS
   );
+  const boothMatches = boothQuery.trim()
+    ? realApps.filter((a) => (a.boothNo || "").toLowerCase().includes(boothQuery.trim().toLowerCase()))
+    : [];
 
   function beginTimeEdit(a) {
     setEditingTimeId(a.id);
@@ -1457,6 +1482,29 @@ function AdminView({
     updateAppTime(a.id, editDay, editStart);
     setEditingTimeId(null);
   }
+
+  function beginContentEdit(a) {
+    setEditingContentId(a.id);
+    setContentDraft({
+      sessionTitle: a.sessionTitle || "",
+      companyName: a.companyName || "",
+      boothNo: a.boothNo || "",
+      picName: a.picName || "",
+      picPosition: a.picPosition || "",
+      picEmail: a.picEmail || "",
+      picPhone: a.picPhone || "",
+      sessionDescription: a.sessionDescription || "",
+      track: a.track || "",
+    });
+  }
+  function cancelContentEdit() {
+    setEditingContentId(null);
+  }
+  function saveContentEdit(a) {
+    updateAppFields(a.id, contentDraft);
+    setEditingContentId(null);
+  }
+
   return (
     <section style={{ paddingTop: 28 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -1531,13 +1579,51 @@ function AdminView({
         </div>
       )}
 
-      {adminTab === "blockSlot" && (
-        <div style={{ marginTop: 20 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 600, color: INK, marginBottom: 10 }}>
-            등록된 시간대 <span style={{ fontWeight: 400, color: MUTED }}>Added time slots</span>
-          </div>
+      {adminTab === "boothSearch" && (
+        <div style={{ maxWidth: 560 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 2 }}>부스 번호로 검색</div>
+          <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 14 }}>Search by booth number</div>
+          <TextInput
+            value={boothQuery} onChange={(e) => setBoothQuery(e.target.value)}
+            placeholder="예: A-102 Booth number" style={{ maxWidth: 240, marginBottom: 18 }}
+          />
+          {boothQuery.trim() === "" ? (
+            <p style={{ fontSize: 13, color: MUTED }}>부스 번호를 입력해주세요. Enter a booth number to search.</p>
+          ) : boothMatches.length === 0 ? (
+            <p style={{ fontSize: 13, color: MUTED }}>일치하는 부스가 없습니다. No matching booth found.</p>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {boothMatches.map((a) => (
+                <div key={a.id} style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "12px 14px", background: "#FAFAFC" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, flexWrap: "wrap" }}>
+                    <div>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>
+                        {a.companyName} <span style={{ fontWeight: 400, color: MUTED, fontSize: 12 }}>· 부스 Booth {a.boothNo}</span>
+                      </div>
+                      <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>{a.sessionTitle}</div>
+                    </div>
+                    <Badge tone={a.status === "confirmed" ? "confirmed" : a.status === "pending" ? "pending" : "empty"}>
+                      {a.status === "confirmed" ? "확정 Confirmed" : a.status === "pending" ? "검토중 Pending" : "반려 Rejected"}
+                    </Badge>
+                  </div>
+                  <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: INK, marginTop: 8 }}>
+                    <span><Calendar size={12} style={{ verticalAlign: "-2px" }} /> {DAYS.find((d) => d.key === a.day)?.kr} {a.startTime}</span>
+                    <span><User size={12} style={{ verticalAlign: "-2px" }} /> {a.picName}</span>
+                    <span><Mail size={12} style={{ verticalAlign: "-2px" }} /> {a.picEmail}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {adminTab === "unavailable" && (
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 2 }}>이용불가 시간대</div>
+          <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 14 }}>Unavailable time slots</div>
           {blockedItems.length === 0 ? (
-            <p style={{ fontSize: 13, color: MUTED }}>등록된 항목이 없습니다. No items yet.</p>
+            <p style={{ fontSize: 13, color: MUTED }}>등록된 이용불가 시간대가 없습니다. No unavailable slots yet.</p>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {blockedItems.map((a) => (
@@ -1551,6 +1637,9 @@ function AdminView({
                   <div style={{ fontSize: 12.5, color: INK }}>
                     <span style={{ ...styles.mono, fontWeight: 600 }}>
                       {DAYS.find((d) => d.key === a.day)?.short} {a.startTime}–{toHHMM(toMinutes(a.startTime) + a.duration)}
+                    </span>
+                    <span style={{ color: MUTED, marginLeft: 8 }}>
+                      {DAYS.find((d) => d.key === a.day)?.kr} · {DAYS.find((d) => d.key === a.day)?.en}
                     </span>
                     <span style={{ color: MUTED, marginLeft: 8 }}>{a.sessionTitle}</span>
                   </div>
@@ -1675,18 +1764,19 @@ function AdminView({
             <div>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: INK }}>기업 로고 일괄 다운로드 <span style={{ fontWeight: 400, color: MUTED }}>Bulk download logos</span></div>
               <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                로고가 첨부된 신청서를 전부 순서대로 다운로드합니다. 브라우저가 "여러 파일 다운로드 허용"을 물어보면 허용해주세요.<br />
-                Downloads every uploaded logo one after another. Allow multiple downloads if your browser asks.
+                로고가 첨부된 신청서를 전부 압축(.zip) 파일 하나로 묶어서 다운로드합니다.<br />
+                Downloads every uploaded logo bundled into a single .zip file.
               </div>
             </div>
             <button
-              onClick={() => {
-                const count = downloadAllLogos(allApps);
-                setLogoDownloadMsg(count === 0 ? "다운로드할 로고가 없습니다. No logos to download." : `${count}개 로고 다운로드 시작 Downloading ${count} logos`);
+              onClick={async () => {
+                setLogoDownloadMsg("압축 중… Zipping…");
+                const count = await downloadAllLogosZip(allApps);
+                setLogoDownloadMsg(count === 0 ? "다운로드할 로고가 없습니다. No logos to download." : `${count}개 로고를 zip으로 다운로드했습니다. Downloaded ${count} logos as a zip.`);
               }}
               style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, border: "none", background: GOLD_DARK, color: "#FFF9EC", padding: "9px 16px", borderRadius: 4, fontSize: 13, fontFamily: SANS, flexShrink: 0 }}
             >
-              <Download size={14} /> 로고 전체 다운로드 Download all
+              <Download size={14} /> 로고 전체 다운로드 (.zip) Download all
             </button>
           </div>
           {logoDownloadMsg && (
@@ -1769,7 +1859,7 @@ function AdminView({
                   ) : (
                     <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12.5, color: INK, margin: "10px 0" }}>
                       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <Calendar size={13} /> {DAYS.find((d) => d.key === a.day)?.kr} {a.startTime} ({a.duration}분)
+                        <Calendar size={13} /> {DAYS.find((d) => d.key === a.day)?.kr} <span style={{ color: MUTED }}>{DAYS.find((d) => d.key === a.day)?.en}</span> {a.startTime} ({a.duration}분 <span style={{ color: MUTED }}>min</span>)
                       </span>
                       {!a.isSpecial && (
                         <>
@@ -1781,10 +1871,83 @@ function AdminView({
                     </div>
                   )}
 
+                  {editingContentId === a.id && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10, margin: "10px 0", padding: "14px", background: PAPER_2, borderRadius: 4 }}>
+                      {!a.isSpecial && (
+                        <div>
+                          <span style={{ display: "block", fontSize: 11, marginBottom: 6, color: MUTED }}>박람회 유형 Fair type</span>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            {Object.values(TRACKS).map((t) => (
+                              <PillButton
+                                key={t.key} active={contentDraft.track === t.key}
+                                onClick={() => setContentDraft((d) => ({ ...d, track: t.key }))} accent={t.strong}
+                              >
+                                {t.kr}
+                              </PillButton>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <label>
+                          <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>세션명 Session Title</span>
+                          <TextInput value={contentDraft.sessionTitle} onChange={(e) => setContentDraft((d) => ({ ...d, sessionTitle: e.target.value }))} />
+                        </label>
+                        <label>
+                          <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>업체명 Company</span>
+                          <TextInput value={contentDraft.companyName} onChange={(e) => setContentDraft((d) => ({ ...d, companyName: e.target.value }))} />
+                        </label>
+                        {!a.isSpecial && (
+                          <>
+                            <label>
+                              <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>부스 번호 Booth</span>
+                              <TextInput value={contentDraft.boothNo} onChange={(e) => setContentDraft((d) => ({ ...d, boothNo: e.target.value }))} />
+                            </label>
+                            <label>
+                              <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>담당자 성명 PIC Name</span>
+                              <TextInput value={contentDraft.picName} onChange={(e) => setContentDraft((d) => ({ ...d, picName: e.target.value }))} />
+                            </label>
+                            <label>
+                              <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>담당자 직책 PIC Position</span>
+                              <TextInput value={contentDraft.picPosition} onChange={(e) => setContentDraft((d) => ({ ...d, picPosition: e.target.value }))} />
+                            </label>
+                            <label>
+                              <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>이메일 Email</span>
+                              <TextInput value={contentDraft.picEmail} onChange={(e) => setContentDraft((d) => ({ ...d, picEmail: e.target.value }))} />
+                            </label>
+                            <label>
+                              <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>휴대폰 Phone</span>
+                              <TextInput value={contentDraft.picPhone} onChange={(e) => setContentDraft((d) => ({ ...d, picPhone: e.target.value }))} />
+                            </label>
+                          </>
+                        )}
+                      </div>
+                      {!a.isSpecial && (
+                        <label>
+                          <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>세션 소개 Session Description</span>
+                          <TextArea rows={3} value={contentDraft.sessionDescription} onChange={(e) => setContentDraft((d) => ({ ...d, sessionDescription: e.target.value }))} />
+                        </label>
+                      )}
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={() => saveContentEdit(a)} style={miniBtn("#1F4E44")}>
+                          <CheckCircle2 size={13} /> 저장 Save
+                        </button>
+                        <button onClick={cancelContentEdit} style={miniBtn(MUTED)}>
+                          <X size={13} /> 취소 Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     {editingTimeId !== a.id && (
                       <button onClick={() => beginTimeEdit(a)} style={miniBtn(GOLD_DARK)}>
                         <Calendar size={13} /> 시간 수정 Edit time
+                      </button>
+                    )}
+                    {editingContentId !== a.id && (
+                      <button onClick={() => beginContentEdit(a)} style={miniBtn(NOTICE_ICON)}>
+                        <User size={13} /> 내용 수정 Edit details
                       </button>
                     )}
                     {a.status !== "confirmed" && (
