@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import emailjs from "@emailjs/browser";
 import JSZip from "jszip";
+import { subscribeApplications } from "./storage.js";
 import {
   Calendar, User, Mail, Phone, CheckCircle2, AlertCircle, Info,
   Lock, ShieldCheck, RotateCcw, X, Loader2, Download, Search,
@@ -49,7 +50,7 @@ function overlaps(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && bStart < aEnd;
 }
 function activeApps(apps) {
-  return apps.filter((a) => a.status !== "rejected");
+  return apps.filter((a) => a.status !== "rejected" && a.status !== "canceled");
 }
 function findConflict(apps, day, startMin, endMin, excludeId, gap = GAP) {
   return activeApps(apps).find((a) => {
@@ -121,8 +122,8 @@ async function sendStatusEmail(app, status) {
         to_name: app.picName || app.companyName,
         company_name: app.companyName,
         session_title: app.sessionTitle,
-        status_kr: status === "confirmed" ? "확정" : status === "rejected" ? "반려" : "검토중",
-        status_en: status === "confirmed" ? "Confirmed" : status === "rejected" ? "Rejected" : "Pending",
+        status_kr: status === "confirmed" ? "확정" : status === "rejected" ? "반려" : status === "canceled" ? "취소" : "검토중",
+        status_en: status === "confirmed" ? "Confirmed" : status === "rejected" ? "Rejected" : status === "canceled" ? "Canceled" : "Pending",
         ref_code: refCode(app.id),
         day_label: dayLabel ? dayLabel.kr : app.day,
         start_time: app.startTime,
@@ -370,11 +371,22 @@ function NoticeItem({ n, kr, en }) {
   );
 }
 
+function statusTone(status) {
+  return status === "confirmed" ? "confirmed" : status === "pending" ? "pending" : status === "canceled" ? "canceled" : "empty";
+}
+function statusLabel(status) {
+  return status === "confirmed" ? "확정 Confirmed"
+    : status === "pending" ? "검토중 Pending"
+    : status === "canceled" ? "취소 Canceled"
+    : "반려 Rejected";
+}
+
 function Badge({ children, tone }) {
   const tones = {
     empty: { bg: "transparent", fg: MUTED, border: "#8a8378" },
     pending: { bg: "#3a2f14", fg: "#E8C27A", border: GOLD },
     confirmed: { bg: "#12312a", fg: "#7FD9BE", border: "#3fae8d" },
+    canceled: { bg: "#3a1414", fg: "#E8A6A6", border: LACQUER },
   };
   const t = tones[tone] || tones.empty;
   return (
@@ -510,6 +522,10 @@ export default function App() {
     setApps(list);
   }
   useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    const unsubscribe = subscribeApplications(() => refresh());
+    return unsubscribe;
+  }, []);
 
   async function loadAccessCode() {
     try {
@@ -681,7 +697,7 @@ export default function App() {
   function setAppStatus(id, status) {
     const next = (apps || []).map((a) => (a.id === id ? { ...a, status } : a));
     persist(next);
-    if (status === "confirmed" || status === "rejected") {
+    if (status === "confirmed" || status === "rejected" || status === "canceled") {
       const target = next.find((a) => a.id === id);
       if (target && !target.isSpecial) sendStatusEmail(target, status);
     }
@@ -1168,7 +1184,7 @@ function LookupView({ apps, startEdit }) {
           />
           <Row
             kr="상태" en="Status"
-            value={result.status === "confirmed" ? "확정 Confirmed" : result.status === "pending" ? "검토중 Pending" : "반려 Rejected"}
+            value={statusLabel(result.status)}
           />
           <button
             onClick={() => startEdit(result)}
@@ -1472,6 +1488,7 @@ function AdminView({
     { key: "pending", kr: "검토중", en: "Pending" },
     { key: "confirmed", kr: "확정", en: "Confirmed" },
     { key: "rejected", kr: "반려", en: "Rejected" },
+    { key: "canceled", kr: "취소", en: "Canceled" },
     { key: "unavailable", kr: "이용불가", en: "Unavailable" },
   ];
   const tabs = [
@@ -1630,9 +1647,7 @@ function AdminView({
                       </div>
                       <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>{a.sessionTitle}</div>
                     </div>
-                    <Badge tone={a.status === "confirmed" ? "confirmed" : a.status === "pending" ? "pending" : "empty"}>
-                      {a.status === "confirmed" ? "확정 Confirmed" : a.status === "pending" ? "검토중 Pending" : "반려 Rejected"}
-                    </Badge>
+                    <Badge tone={statusTone(a.status)}>{statusLabel(a.status)}</Badge>
                   </div>
                   <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: INK, marginTop: 8 }}>
                     <span><Calendar size={12} style={{ verticalAlign: "-2px" }} /> {DAYS.find((d) => d.key === a.day)?.kr} {a.startTime}</span>
@@ -1823,9 +1838,7 @@ function AdminView({
                         )}
                       </div>
                     </div>
-                    <Badge tone={a.status === "confirmed" ? "confirmed" : a.status === "pending" ? "pending" : "empty"}>
-                      {a.status === "confirmed" ? "확정 Confirmed" : a.status === "pending" ? "검토중 Pending" : "반려 Rejected"}
-                    </Badge>
+                    <Badge tone={statusTone(a.status)}>{statusLabel(a.status)}</Badge>
                   </div>
 
                   {editingTimeId === a.id ? (
@@ -1957,6 +1970,11 @@ function AdminView({
                         {a.status !== "rejected" && (
                           <button onClick={() => setAppStatus(a.id, "rejected")} style={miniBtn(LACQUER)}>
                             <X size={13} /> 반려 Reject
+                          </button>
+                        )}
+                        {a.status !== "canceled" && (
+                          <button onClick={() => setAppStatus(a.id, "canceled")} style={miniBtn(LACQUER_DARK)}>
+                            <X size={13} /> 취소 Cancel
                           </button>
                         )}
                         {a.status !== "pending" && (
