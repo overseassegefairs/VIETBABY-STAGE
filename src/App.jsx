@@ -102,7 +102,9 @@ const DEFAULT_ACCESS_CODE = "vietbaby2026";
 
 const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID;
 const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+const EMAILJS_ADMIN_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_ADMIN_TEMPLATE_ID;
 const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+const ORGANIZER_NOTIFY_EMAIL = import.meta.env.VITE_ORGANIZER_NOTIFY_EMAIL || "overseas.segefairs@gmail.com";
 const APPLICATION_DEADLINE = new Date("2026-09-14T23:59:59+07:00");
 const STALE_PENDING_DAYS = 3;
 
@@ -130,6 +132,33 @@ async function sendStatusEmail(app, status) {
     );
   } catch (e) {
     console.error("email send failed", e);
+  }
+}
+
+async function sendNewApplicationAlert(app) {
+  if (!EMAILJS_SERVICE_ID || !EMAILJS_ADMIN_TEMPLATE_ID || !EMAILJS_PUBLIC_KEY) return;
+  const dayLabel = DAYS.find((d) => d.key === app.day);
+  try {
+    await emailjs.send(
+      EMAILJS_SERVICE_ID,
+      EMAILJS_ADMIN_TEMPLATE_ID,
+      {
+        to_email: ORGANIZER_NOTIFY_EMAIL,
+        company_name: app.companyName,
+        booth_no: app.boothNo,
+        session_title: app.sessionTitle,
+        pic_name: app.picName,
+        pic_email: app.picEmail,
+        pic_phone: app.picPhone,
+        track_label: TRACKS[app.track] ? `${TRACKS[app.track].kr} / ${TRACKS[app.track].en}` : "-",
+        day_label: dayLabel ? dayLabel.kr : app.day,
+        start_time: app.startTime,
+        end_time: toHHMM(toMinutes(app.startTime) + app.duration),
+      },
+      { publicKey: EMAILJS_PUBLIC_KEY }
+    );
+  } catch (e) {
+    console.error("admin alert email failed", e);
   }
 }
 
@@ -629,6 +658,7 @@ export default function App() {
     await persist(next);
     setSubmitting(false);
     setConfirmation(record);
+    sendNewApplicationAlert(record);
     setEditingId(null);
     setForm(emptyForm);
   }
@@ -661,6 +691,7 @@ export default function App() {
     if (!apps) return [];
     const sorted = [...apps].sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
     if (statusFilter === "all") return sorted;
+    if (statusFilter === "unavailable") return sorted.filter((a) => a.isBlocked);
     return sorted.filter((a) => a.status === statusFilter);
   }, [apps, statusFilter]);
 
@@ -1441,18 +1472,15 @@ function AdminView({
     { key: "pending", kr: "검토중", en: "Pending" },
     { key: "confirmed", kr: "확정", en: "Confirmed" },
     { key: "rejected", kr: "반려", en: "Rejected" },
+    { key: "unavailable", kr: "이용불가", en: "Unavailable" },
   ];
   const tabs = [
     { key: "applications", kr: "신청 내역 관리", en: "Applications" },
-    { key: "boothSearch", kr: "부스 검색", en: "Booth Search" },
+    { key: "boothSearch", kr: "신청 조회", en: "Search" },
     { key: "longForm", kr: "장시간 일정 등록", en: "Long-form Schedule" },
     { key: "blockSlot", kr: "스테이지 시간 추가", en: "Add Stage Time" },
-    { key: "unavailable", kr: "이용불가", en: "Unavailable" },
     { key: "settings", kr: "설정", en: "Settings" },
   ];
-  const blockedItems = (allApps || [])
-    .filter((a) => a.isBlocked)
-    .sort((a, b) => (a.day === b.day ? toMinutes(a.startTime) - toMinutes(b.startTime) : a.day.localeCompare(b.day)));
 
   const realApps = (allApps || []).filter((a) => !a.isBlocked && !a.isSpecial);
   const stats = {
@@ -1611,41 +1639,6 @@ function AdminView({
                     <span><User size={12} style={{ verticalAlign: "-2px" }} /> {a.picName}</span>
                     <span><Mail size={12} style={{ verticalAlign: "-2px" }} /> {a.picEmail}</span>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {adminTab === "unavailable" && (
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 2 }}>이용불가 시간대</div>
-          <div style={{ fontSize: 11.5, color: MUTED, marginBottom: 14 }}>Unavailable time slots</div>
-          {blockedItems.length === 0 ? (
-            <p style={{ fontSize: 13, color: MUTED }}>등록된 이용불가 시간대가 없습니다. No unavailable slots yet.</p>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              {blockedItems.map((a) => (
-                <div
-                  key={a.id}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
-                    border: `1px solid ${BORDER}`, borderRadius: 6, padding: "10px 14px", background: "#F1F4F9",
-                  }}
-                >
-                  <div style={{ fontSize: 12.5, color: INK }}>
-                    <span style={{ ...styles.mono, fontWeight: 600 }}>
-                      {DAYS.find((d) => d.key === a.day)?.short} {a.startTime}–{toHHMM(toMinutes(a.startTime) + a.duration)}
-                    </span>
-                    <span style={{ color: MUTED, marginLeft: 8 }}>
-                      {DAYS.find((d) => d.key === a.day)?.kr} · {DAYS.find((d) => d.key === a.day)?.en}
-                    </span>
-                    <span style={{ color: MUTED, marginLeft: 8 }}>{a.sessionTitle}</span>
-                  </div>
-                  <button onClick={() => deleteApp(a.id)} style={miniBtn(LACQUER)}>
-                    <X size={13} /> 삭제 Delete
-                  </button>
                 </div>
               ))}
             </div>
@@ -1950,20 +1943,28 @@ function AdminView({
                         <User size={13} /> 내용 수정 Edit details
                       </button>
                     )}
-                    {a.status !== "confirmed" && (
-                      <button onClick={() => setAppStatus(a.id, "confirmed")} style={miniBtn("#1F4E44")}>
-                        <CheckCircle2 size={13} /> 확정 Confirm
+                    {a.isBlocked ? (
+                      <button onClick={() => deleteApp(a.id)} style={miniBtn(LACQUER)}>
+                        <X size={13} /> 삭제 Delete
                       </button>
-                    )}
-                    {a.status !== "rejected" && (
-                      <button onClick={() => setAppStatus(a.id, "rejected")} style={miniBtn(LACQUER)}>
-                        <X size={13} /> 반려 Reject
-                      </button>
-                    )}
-                    {a.status !== "pending" && (
-                      <button onClick={() => setAppStatus(a.id, "pending")} style={miniBtn(MUTED)}>
-                        <RotateCcw size={13} /> 검토중으로 Set pending
-                      </button>
+                    ) : (
+                      <>
+                        {a.status !== "confirmed" && (
+                          <button onClick={() => setAppStatus(a.id, "confirmed")} style={miniBtn("#1F4E44")}>
+                            <CheckCircle2 size={13} /> 확정 Confirm
+                          </button>
+                        )}
+                        {a.status !== "rejected" && (
+                          <button onClick={() => setAppStatus(a.id, "rejected")} style={miniBtn(LACQUER)}>
+                            <X size={13} /> 반려 Reject
+                          </button>
+                        )}
+                        {a.status !== "pending" && (
+                          <button onClick={() => setAppStatus(a.id, "pending")} style={miniBtn(MUTED)}>
+                            <RotateCcw size={13} /> 검토중으로 Set pending
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
