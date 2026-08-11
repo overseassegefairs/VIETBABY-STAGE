@@ -51,3 +51,19 @@ async function list(prefix) {
 }
 
 window.storage = { get, set, delete: del, list };
+
+// Real-time sync: notifies `onChange` whenever the `applications` row changes
+// in Supabase (from any browser — admin actions, new submissions, etc).
+// Requires the table to be added to the `supabase_realtime` publication —
+// see README section 1 for the one-line SQL command.
+export function subscribeApplications(onChange) {
+  const channel = supabase
+    .channel("kv_store_applications")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "kv_store", filter: "key=eq.applications" },
+      (payload) => onChange(payload)
+    )
+    .subscribe();
+  return () => supabase.removeChannel(channel);
+}
