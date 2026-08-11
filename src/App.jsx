@@ -1,7 +1,9 @@
+
 import { useState, useEffect, useMemo } from "react";
+import emailjs from "@emailjs/browser";
 import {
   Calendar, User, Mail, Phone, CheckCircle2, AlertCircle, Info,
-  Lock, ShieldCheck, RotateCcw, X, Loader2, Download,
+  Lock, ShieldCheck, RotateCcw, X, Loader2, Download, Search,
 } from "lucide-react";
 
 const DAYS = [
@@ -12,8 +14,8 @@ const DAYS = [
 ];
 
 const DAY_START = 9 * 60;
-const DAY_END = 17 * 60 + 30;
-const DURATIONS = [45, 60];
+const DAY_END = 17 * 60 + 45;
+const SESSION_LEN = 45;
 const GAP = 15;
 
 function toMinutes(hhmm) {
@@ -32,6 +34,16 @@ function buildFineSlots() {
 }
 const FINE_SLOTS = buildFineSlots();
 const STANDARD_START_TIMES = ["10:30", "11:30", "13:00", "14:00", "15:00", "16:00", "17:00"];
+
+function nearestStandardStart(min) {
+  let best = STANDARD_START_TIMES[0];
+  let bestDiff = Infinity;
+  for (const t of STANDARD_START_TIMES) {
+    const diff = Math.abs(toMinutes(t) - min);
+    if (diff < bestDiff) { bestDiff = diff; best = t; }
+  }
+  return best;
+}
 
 function overlaps(aStart, aEnd, bStart, bEnd) {
   return aStart < bEnd && bStart < aEnd;
@@ -88,10 +100,46 @@ function refCode(id) {
 
 const DEFAULT_ACCESS_CODE = "vietbaby2026";
 
+const EMAILJS_SERVICE_ID = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+const EMAILJS_TEMPLATE_ID = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+const EMAILJS_PUBLIC_KEY = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+const APPLICATION_DEADLINE = new Date("2026-09-14T23:59:59+07:00");
+const STALE_PENDING_DAYS = 3;
+
+async function sendStatusEmail(app, status) {
+  if (!EMAILJS_SERVICE_ID || !EMAILJS_TEMPLATE_ID || !EMAILJS_PUBLIC_KEY) return;
+  if (!app.picEmail) return;
+  const dayLabel = DAYS.find((d) => d.key === app.day);
+  try {
+    await emailjs.send(
+      EMAILJS_SERVICE_ID,
+      EMAILJS_TEMPLATE_ID,
+      {
+        to_email: app.picEmail,
+        to_name: app.picName || app.companyName,
+        company_name: app.companyName,
+        session_title: app.sessionTitle,
+        status_kr: status === "confirmed" ? "확정" : status === "rejected" ? "반려" : "검토중",
+        status_en: status === "confirmed" ? "Confirmed" : status === "rejected" ? "Rejected" : "Pending",
+        ref_code: refCode(app.id),
+        day_label: dayLabel ? dayLabel.kr : app.day,
+        start_time: app.startTime,
+        end_time: toHHMM(toMinutes(app.startTime) + app.duration),
+      },
+      { publicKey: EMAILJS_PUBLIC_KEY }
+    );
+  } catch (e) {
+    console.error("email send failed", e);
+  }
+}
+
 const DEFAULT_BLOCKS = [
   { day: "10-15", startTime: "09:00", duration: 45 },
   { day: "10-17", startTime: "09:00", duration: 45 },
   { day: "10-18", startTime: "09:00", duration: 45 },
+  { day: "10-15", startTime: "12:00", duration: 60 },
+  { day: "10-17", startTime: "12:00", duration: 60 },
+  { day: "10-18", startTime: "12:00", duration: 60 },
 ];
 
 function makeBlockedRecord(day, startTime, duration) {
@@ -108,6 +156,33 @@ function dayItemsFor(apps, dayKey, confirmedOnly) {
   return activeApps(apps)
     .filter((a) => a.day === dayKey && !a.isBlocked && (!confirmedOnly || a.status === "confirmed"))
     .sort((a, b) => toMinutes(a.startTime) - toMinutes(b.startTime));
+}
+
+function downloadDataUrl(dataUrl, filename) {
+  const link = document.createElement("a");
+  link.href = dataUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function logoExtension(dataUrl) {
+  const match = /^data:image\/(\w+);/.exec(dataUrl || "");
+  return match ? match[1].replace("jpeg", "jpg") : "png";
+}
+
+function downloadAllLogos(apps) {
+  const withLogo = (apps || []).filter((a) => a.companyLogo);
+  withLogo.forEach((a, i) => {
+    setTimeout(() => {
+      downloadDataUrl(
+        a.companyLogo,
+        `${(a.companyName || "logo").replace(/[^\w.-]+/g, "_")}_${i + 1}.${logoExtension(a.companyLogo)}`
+      );
+    }, i * 400);
+  });
+  return withLogo.length;
 }
 
 function escapeHtml(str) {
@@ -183,11 +258,13 @@ function loadFonts() {
 
 const INK = "#141414";
 const MUTED = "#54504A";
-const PAPER = "#FBF3E4";
-const PAPER_2 = "#F3E9D2";
-const BORDER = "#D9CFB4";
+const PAPER = "#FFFFFF";
+const PAPER_2 = "#E7ECF5";
+const BORDER = "#C3CCDA";
 const GOLD = "#C7963B";
 const GOLD_DARK = "#8C6A25";
+const NOTICE_BORDER = "#AEBEDA";
+const NOTICE_ICON = "#3E5C82";
 const LACQUER = "#A32B2E";
 const LACQUER_DARK = "#7A2022";
 const LACQUER_LIGHT = "#F4D9D6";
@@ -232,7 +309,7 @@ const styles = {
 
 function ContactCard({ c }) {
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#FFFDF7", border: `1px solid ${BORDER}`, borderRadius: 4, padding: "10px 12px" }}>
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", background: "#F1F4F9", border: `1px solid ${BORDER}`, borderRadius: 4, padding: "10px 12px" }}>
       <Phone size={14} color={LACQUER} style={{ marginTop: 2, flexShrink: 0 }} aria-hidden="true" />
       <div>
         <div style={{ fontWeight: 600, fontSize: 12.5, color: INK }}>{c.kr ? `${c.kr} · ${c.en}` : c.en}</div>
@@ -245,7 +322,7 @@ function ContactCard({ c }) {
 function NoticeItem({ n, kr, en }) {
   return (
     <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-      <span style={{ ...styles.mono, fontSize: 11, color: GOLD_DARK, border: `1px solid ${GOLD_DARK}`, borderRadius: "50%", width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+      <span style={{ ...styles.mono, fontSize: 11, color: NOTICE_ICON, border: `1px solid ${NOTICE_ICON}`, borderRadius: "50%", width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
         {n}
       </span>
       <div style={{ lineHeight: 1.7 }}>
@@ -308,8 +385,8 @@ function Field({ kr, en, required, hint, hintEn, children }) {
 }
 
 const inputStyle = {
-  width: "100%", boxSizing: "border-box", border: `1px solid #C9BFA6`, borderRadius: 4,
-  padding: "9px 11px", fontSize: 14, fontFamily: SANS, background: "#FFFDF7", color: INK, outline: "none",
+  width: "100%", boxSizing: "border-box", border: `1px solid #AEB6C4`, borderRadius: 4,
+  padding: "9px 11px", fontSize: 14, fontFamily: SANS, background: "#F1F4F9", color: INK, outline: "none",
 };
 function TextInput(props) { return <input {...props} style={{ ...inputStyle, ...(props.style || {}) }} />; }
 function TextArea(props) { return <textarea {...props} style={{ ...inputStyle, resize: "vertical", ...(props.style || {}) }} />; }
@@ -320,7 +397,7 @@ function PillButton({ active, onClick, children, accent = LACQUER }) {
     <button
       type="button" onClick={onClick}
       style={{
-        cursor: "pointer", border: `1px solid ${active ? accent : "#C9BFA6"}`,
+        cursor: "pointer", border: `1px solid ${active ? accent : "#AEB6C4"}`,
         background: active ? accent : "transparent", color: active ? "#FFF9EC" : INK,
         borderRadius: 20, padding: "7px 14px", fontSize: 13, fontWeight: 500, fontFamily: SANS, transition: "all .15s",
       }}
@@ -349,6 +426,7 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
   const [confirmation, setConfirmation] = useState(null);
+  const [editingId, setEditingId] = useState(null);
 
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [passInput, setPassInput] = useState("");
@@ -427,6 +505,11 @@ export default function App() {
     await persist(next);
   }
 
+  async function updateAppTime(id, day, startTime) {
+    const next = (apps || []).map((a) => (a.id === id ? { ...a, day, startTime } : a));
+    await persist(next);
+  }
+
   async function persist(next) {
     setApps(next);
     try {
@@ -436,8 +519,9 @@ export default function App() {
     }
   }
 
-  function pickSlot(day, startMin) {
-    setForm((f) => ({ ...f, day, startTime: toHHMM(startMin) }));
+  function pickSlot(day, approxMin) {
+    const startTime = nearestStandardStart(approxMin);
+    setForm((f) => ({ ...f, day, startTime }));
     setView("apply");
   }
 
@@ -484,9 +568,9 @@ export default function App() {
   }
 
   const startMin = toMinutes(form.startTime);
-  const endMin = startMin + form.duration;
+  const endMin = startMin + SESSION_LEN;
   const overLimit = endMin > DAY_END;
-  const conflict = apps ? findConflict(apps, form.day, startMin, endMin, null) : null;
+  const conflict = apps ? findConflict(apps, form.day, startMin, endMin, editingId) : null;
   const slotOk = !overLimit && !conflict;
 
   function update(field, value) {
@@ -515,21 +599,48 @@ export default function App() {
       setSubmitError("올바른 이메일 형식이 아닙니다 (@ 포함 필요). Please enter a valid email address (must include '@').");
       return;
     }
-    if (overLimit) { setSubmitError("선택하신 시간대가 운영 시간(17:30)을 초과합니다. The slot exceeds closing time (17:30)."); return; }
+    if (overLimit) { setSubmitError("선택하신 시간대가 운영 시간(17:45)을 초과합니다. The slot exceeds closing time (17:45)."); return; }
     if (conflict) { setSubmitError("선택하신 시간대는 앞뒤 세션과 겹치거나 15분 간격이 부족합니다. This time overlaps another session or lacks the required 15-minute gap."); return; }
     setSubmitting(true);
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-    const record = { id, ...form, duration: form.duration, status: "pending", submittedAt: new Date().toISOString() };
-    const next = [...(apps || []), record];
+    let record;
+    let next;
+    if (editingId) {
+      record = { ...form, id: editingId, duration: SESSION_LEN, status: "pending", submittedAt: new Date().toISOString() };
+      next = (apps || []).map((a) => (a.id === editingId ? record : a));
+    } else {
+      const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+      record = { id, ...form, duration: SESSION_LEN, status: "pending", submittedAt: new Date().toISOString() };
+      next = [...(apps || []), record];
+    }
     await persist(next);
     setSubmitting(false);
     setConfirmation(record);
+    setEditingId(null);
     setForm(emptyForm);
+  }
+
+  function startEdit(record) {
+    setEditingId(record.id);
+    setForm({
+      track: record.track || "",
+      companyName: record.companyName || "", boothNo: record.boothNo || "",
+      picName: record.picName || "", picPosition: record.picPosition || "",
+      phoneCountry: record.phoneCountry || "kr", picPhone: record.picPhone || "", picEmail: record.picEmail || "",
+      sessionTitle: record.sessionTitle || "", sessionDescription: record.sessionDescription || "",
+      companyLogo: record.companyLogo || "",
+      day: record.day || DAYS[0].key, startTime: record.startTime || STANDARD_START_TIMES[0],
+    });
+    setConfirmation(null);
+    setView("apply");
   }
 
   function setAppStatus(id, status) {
     const next = (apps || []).map((a) => (a.id === id ? { ...a, status } : a));
     persist(next);
+    if (status === "confirmed" || status === "rejected") {
+      const target = next.find((a) => a.id === id);
+      if (target && !target.isSpecial) sendStatusEmail(target, status);
+    }
   }
 
   const filteredAdminApps = useMemo(() => {
@@ -557,8 +668,11 @@ export default function App() {
             form={form} update={update} submitForm={submitForm} submitting={submitting}
             submitError={submitError} confirmation={confirmation} setConfirmation={setConfirmation}
             slotOk={slotOk} overLimit={overLimit} conflict={conflict} startMin={startMin} endMin={endMin}
+            editingId={editingId} startEdit={startEdit} apps={apps}
           />
         )}
+
+        {view === "lookup" && <LookupView apps={apps} startEdit={startEdit} />}
 
         {view === "admin" && !adminUnlocked && (
           <AdminGate
@@ -577,7 +691,7 @@ export default function App() {
             blockError={blockError} addSpecialBlock={addSpecialBlock}
             blockedForm={blockedForm} setBlockedForm={setBlockedForm}
             blockedError={blockedError} addBlockedTime={addBlockedTime}
-            deleteApp={deleteApp} changeAccessCode={changeAccessCode}
+            deleteApp={deleteApp} changeAccessCode={changeAccessCode} updateAppTime={updateAppTime}
           />
         )}
 
@@ -591,6 +705,7 @@ function Header({ view, setView }) {
   const tabs = [
     { key: "schedule", kr: "스테이지 스케줄", en: "Stage Schedule" },
     { key: "apply", kr: "세션 신청하기", en: "Apply for a Session" },
+    { key: "lookup", kr: "내 신청 조회", en: "My Application" },
   ];
   return (
     <header style={{ padding: "40px 0 24px", borderBottom: `2px solid ${INK}` }}>
@@ -639,6 +754,70 @@ function Footer({ view, setView }) {
   );
 }
 
+function MiniSchedule({ apps, selectedDay }) {
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 13.5, fontWeight: 700, color: INK }}>실시간 스테이지 스케줄</span>
+        <span style={{ fontSize: 11.5, color: MUTED }}>Live Stage Schedule</span>
+      </div>
+      <div style={{ overflowX: "auto", paddingBottom: 4 }}>
+        <div style={{ minWidth: 640 }}>
+          <div style={{ display: "flex" }}>
+            <div style={{ width: 58, flexShrink: 0 }} />
+            <div style={{ flex: 1, position: "relative", height: 16 }}>
+              {HOUR_TICKS.filter((t) => !SKIP_LABEL.has(t)).map((t) => (
+                <span
+                  key={t}
+                  style={{
+                    position: "absolute", left: `${pct(t)}%`,
+                    transform: t === DAY_END ? "translateX(-100%)" : "translateX(-50%)",
+                    fontSize: 9.5, color: MUTED, ...styles.mono,
+                  }}
+                >
+                  {tickLabel(t)}
+                </span>
+              ))}
+            </div>
+          </div>
+          {DAYS.map((d) => {
+            const blocks = computeDayBlocks(apps || [], d.key);
+            const isSel = d.key === selectedDay;
+            return (
+              <div key={d.key} style={{ display: "flex", alignItems: "stretch", marginBottom: 5 }}>
+                <div style={{ width: 58, flexShrink: 0, display: "flex", alignItems: "center", paddingRight: 6 }}>
+                  <span style={{ ...styles.mono, fontSize: 11, color: isSel ? LACQUER : INK, fontWeight: isSel ? 700 : 400 }}>{d.short}</span>
+                </div>
+                <div style={{ flex: 1, position: "relative", height: 26, background: "#E9EDF4", border: `1px solid ${isSel ? LACQUER : BORDER}`, borderRadius: 3 }}>
+                  {blocks.map((b, i) => {
+                    if (b.status === "empty") return null;
+                    const left = pct(b.startMin);
+                    const width = pct(b.endMin) - left;
+                    let fill;
+                    if (b.app.isBlocked) {
+                      fill = "repeating-linear-gradient(45deg, #C7CEDA, #C7CEDA 3px, #AEB6C6 3px, #AEB6C6 6px)";
+                    } else {
+                      const t = TRACKS[b.app.track] || TRACKS.vietbaby;
+                      fill = b.status === "pending" ? t.light : t.strong;
+                    }
+                    return (
+                      <div
+                        key={i}
+                        title={b.app.isBlocked ? "이용 불가 Unavailable" : `${b.app.sessionTitle} · ${b.app.companyName}`}
+                        style={{ position: "absolute", left: `${left}%`, width: `${width}%`, top: 2, bottom: 2, background: fill, borderRadius: 2 }}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot, goApply }) {
   if (loading) {
     return (
@@ -656,6 +835,8 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
 
   return (
     <section style={{ paddingTop: 28 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, color: INK, margin: "0 0 3px" }}>스테이지 스케줄 실시간 현황 조회</h2>
+      <p style={{ fontSize: 12.5, color: MUTED, margin: "0 0 14px" }}>Live Stage Schedule Status</p>
       <p style={{ fontSize: 13.5, color: INK, margin: "0 0 4px" }}>
         4일간 전체 일정을 한 화면에서 볼 수 있어요. 막대를 클릭하면 세부 정보가, 빈 구간을 클릭하면 신청서가 열립니다.
       </p>
@@ -691,7 +872,7 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
                   <div style={{ ...styles.mono, fontSize: 13, color: INK }}>{d.short}</div>
                   <div style={{ fontSize: 10, color: INK, letterSpacing: "0.05em" }}>{d.dow}</div>
                 </div>
-                <div style={{ flex: 1, position: "relative", height: 56, background: "#F1EAD6", border: `1px solid ${BORDER}`, borderRadius: 4 }}>
+                <div style={{ flex: 1, position: "relative", height: 56, background: "#E9EDF4", border: `1px solid ${BORDER}`, borderRadius: 4 }}>
                   {HOUR_TICKS.map((t) => (
                     <div key={t} style={{ position: "absolute", left: `${pct(t)}%`, top: 0, bottom: 0, width: 1, background: "rgba(20,20,20,0.10)" }} />
                   ))}
@@ -703,8 +884,8 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
 
                     let fill = "transparent", fg = "#8a8378", fgSub = "#8a8378";
                     if (isBlocked) {
-                      fill = "repeating-linear-gradient(45deg, #D8D2C4, #D8D2C4 5px, #C5BEAE 5px, #C5BEAE 10px)";
-                      fg = "#3A362E";
+                      fill = "repeating-linear-gradient(45deg, #C7CEDA, #C7CEDA 5px, #AEB6C6 5px, #AEB6C6 10px)";
+                      fg = "#2B2E35";
                     } else if (b.status !== "empty") {
                       const t = TRACKS[b.app.track] || TRACKS.vietbaby;
                       if (b.status === "pending") { fill = t.light; fg = t.text; fgSub = t.text + "CC"; }
@@ -716,11 +897,16 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
                     return (
                       <div
                         key={i}
-                        onClick={() =>
-                          b.status === "empty"
-                            ? pickSlot(d.key, b.startMin)
-                            : setSelectedBlock({ day: d.key, startMin: b.startMin, app: b.app, status: b.status })
-                        }
+                        onClick={(e) => {
+                          if (b.status !== "empty") {
+                            setSelectedBlock({ day: d.key, startMin: b.startMin, app: b.app, status: b.status });
+                            return;
+                          }
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const fraction = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0;
+                          const clickedMin = b.startMin + fraction * (b.endMin - b.startMin);
+                          pickSlot(d.key, clickedMin);
+                        }}
                         title={
                           b.status === "empty"
                             ? "빈 시간 · 신청하기 / Open · click to apply"
@@ -732,26 +918,28 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
                           position: "absolute", left: `${left}%`, width: `${width}%`, top: 4, bottom: 4,
                           background: fill,
                           boxShadow: b.status !== "empty" && !isBlocked ? "inset 0 0 0 1px rgba(0,0,0,0.12)" : "none",
-                          border: isSel ? `2px solid ${INK}` : b.status === "empty" ? "1px dashed #C9BFA6" : isBlocked ? "1px solid #B4AC98" : "none",
-                          borderRadius: 3, cursor: isBlocked ? "default" : "pointer", overflow: "hidden",
-                          display: "flex", flexDirection: "column", alignItems: isBlocked ? "center" : "stretch", justifyContent: "center",
+                          border: isSel ? `2px solid ${INK}` : b.status === "empty" ? "1px dashed #AEB6C4" : isBlocked ? "1px solid #9AA1AF" : "none",
+                          borderRadius: 3, cursor: "pointer", overflow: "hidden",
+                          display: "flex", flexDirection: "column", alignItems: showLabel && !isBlocked ? "stretch" : "center", justifyContent: "center",
                           padding: showLabel && !isBlocked ? "0 8px" : 0,
                         }}
                       >
-                        {isBlocked ? (
-                          <span style={{ fontSize: 13, fontWeight: 700, color: fg }}>✕</span>
-                        ) : (
-                          showLabel && b.status !== "empty" && (
-                            <>
-                              <span style={{ fontSize: 12, color: fg, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                {b.app.sessionTitle}
-                              </span>
-                              {showTwoLines && (
-                                <span style={{ fontSize: 11, color: fgSub, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                                  {toHHMM(b.startMin)}–{toHHMM(b.endMin)} · {b.app.companyName}
+                        {b.status !== "empty" && (
+                          isBlocked ? (
+                            <span style={{ fontSize: 13, fontWeight: 700, color: fg }}>✕</span>
+                          ) : (
+                            showLabel && (
+                              <>
+                                <span style={{ fontSize: 11.5, color: fg, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                  <span style={{ ...styles.mono, fontWeight: 600 }}>{toHHMM(b.startMin)}–{toHHMM(b.endMin)}</span> {b.app.sessionTitle}
                                 </span>
-                              )}
-                            </>
+                                {showTwoLines && (
+                                  <span style={{ fontSize: 11, color: fgSub, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                                    {b.app.companyName}
+                                  </span>
+                                )}
+                              </>
+                            )
                           )
                         )}
                       </div>
@@ -765,7 +953,7 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 18 }}>
-        {legendRows.map((row) => (
+        {legendRows.map((row, i) => (
           <div key={row.key} style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
             <span style={{ fontSize: 13, fontWeight: 700, color: INK, minWidth: 150 }}>
               {row.kr} <span style={{ fontWeight: 400 }}>{row.en}</span>
@@ -778,20 +966,35 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
               <span style={{ width: 14, height: 14, borderRadius: 2, background: row.dark, flexShrink: 0 }} />
               <span style={{ fontSize: 12, color: INK }}>확정 <span style={{ fontWeight: 400 }}>Confirmed</span></span>
             </span>
+            {i === 0 && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 14, height: 14, borderRadius: 2, border: "1.5px dashed #8a8378", flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: INK }}>OPEN <span style={{ fontWeight: 400 }}>신청 가능 Open</span></span>
+              </span>
+            )}
+            {i === 1 && (
+              <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <span style={{ width: 14, height: 14, borderRadius: 2, background: "repeating-linear-gradient(45deg, #C7CEDA, #C7CEDA 3px, #AEB6C6 3px, #AEB6C6 6px)", border: "1px solid #9AA1AF", flexShrink: 0 }} />
+                <span style={{ fontSize: 12, color: INK }}>✕ 이용 불가 <span style={{ fontWeight: 400 }}>Unavailable</span></span>
+              </span>
+            )}
           </div>
         ))}
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 14, height: 14, borderRadius: 2, border: "1.5px dashed #8a8378", flexShrink: 0 }} />
-          <span style={{ fontSize: 12, color: INK }}>OPEN <span style={{ fontWeight: 400 }}>신청 가능 Open</span></span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ width: 14, height: 14, borderRadius: 2, background: "repeating-linear-gradient(45deg, #D8D2C4, #D8D2C4 3px, #C5BEAE 3px, #C5BEAE 6px)", border: "1px solid #B4AC98", flexShrink: 0 }} />
-          <span style={{ fontSize: 12, color: INK }}>✕ 이용 불가 <span style={{ fontWeight: 400 }}>Unavailable</span></span>
-        </div>
       </div>
 
       {selectedBlock && (
-        <div style={{ marginTop: 18, padding: "16px 18px", border: `1px solid ${BORDER}`, borderRadius: 6, background: "#FFFDF7" }}>
+        <div style={{ position: "relative", marginTop: 18, padding: "16px 44px 16px 18px", border: `1px solid ${BORDER}`, borderRadius: 6, background: "#F1F4F9" }}>
+          <button
+            onClick={() => setSelectedBlock(null)}
+            aria-label="닫기 Close"
+            style={{
+              position: "absolute", top: 10, right: 10, cursor: "pointer",
+              width: 26, height: 26, borderRadius: "50%", border: `1px solid ${BORDER}`,
+              background: "#FFFFFF", color: MUTED, display: "flex", alignItems: "center", justifyContent: "center", padding: 0,
+            }}
+          >
+            <X size={14} />
+          </button>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>
@@ -814,13 +1017,10 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
               </Badge>
             )}
           </div>
-          <button onClick={() => setSelectedBlock(null)} style={{ marginTop: 12, cursor: "pointer", border: "none", background: "none", color: INK, fontSize: 12.5, padding: 0 }}>
-            닫기 Close
-          </button>
         </div>
       )}
 
-      <div style={{ marginTop: 24, padding: "18px 20px", border: `1px solid ${GOLD}`, borderRadius: 6, background: PAPER_2 }}>
+      <div style={{ marginTop: 24, padding: "18px 20px", border: `1px solid ${NOTICE_BORDER}`, borderRadius: 6, background: PAPER_2 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
           <span style={{ fontSize: 14, color: INK }}>
             원하는 시간대가 비어있나요? 지금 세션을 신청해보세요.<br />
@@ -833,7 +1033,7 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
             세션 신청하기 Apply
           </button>
         </div>
-        <div style={{ borderTop: `1px solid ${GOLD}`, marginTop: 16, paddingTop: 14 }}>
+        <div style={{ borderTop: `1px solid ${NOTICE_BORDER}`, marginTop: 16, paddingTop: 14 }}>
           <ul style={{ margin: 0, padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
             {[
               ["본 세미나 참가 비용은 무료입니다.", "Participation in this seminar is free of charge."],
@@ -841,7 +1041,7 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
               ["발표자료는 반드시 USB에 저장하여 지참해주시기 바랍니다.", "Please bring your presentation materials saved on a USB drive."],
             ].map(([kr, en], i) => (
               <li key={i} style={{ display: "flex", gap: 8, fontSize: 12.5 }}>
-                <span style={{ color: GOLD_DARK, flexShrink: 0 }}>·</span>
+                <span style={{ color: NOTICE_ICON, flexShrink: 0 }}>·</span>
                 <span>
                   <span style={{ color: INK }}>{kr}</span><br />
                   <span style={{ color: MUTED }}>{en}</span>
@@ -855,7 +1055,85 @@ function ScheduleView({ apps, loading, selectedBlock, setSelectedBlock, pickSlot
   );
 }
 
-function ApplyView({ form, update, submitForm, submitting, submitError, confirmation, setConfirmation, slotOk, overLimit, conflict, startMin, endMin }) {
+function LookupView({ apps, startEdit }) {
+  const [refInput, setRefInput] = useState("");
+  const [emailInput, setEmailInput] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+
+  function handleLookup(e) {
+    e.preventDefault();
+    setError("");
+    setResult(null);
+    const code = refInput.trim().toUpperCase();
+    const email = emailInput.trim().toLowerCase();
+    if (!code || !email) {
+      setError("접수 번호와 이메일을 모두 입력해주세요. Please enter both the reference code and email.");
+      return;
+    }
+    const found = (apps || []).find(
+      (a) => !a.isSpecial && refCode(a.id) === code && (a.picEmail || "").toLowerCase() === email
+    );
+    if (!found) {
+      setError("일치하는 신청 내역을 찾을 수 없습니다. 접수번호와 이메일을 확인해주세요. No matching application found — please check your reference code and email.");
+      return;
+    }
+    setResult(found);
+  }
+
+  return (
+    <section style={{ paddingTop: 28, maxWidth: 480 }}>
+      <h2 style={{ fontSize: 20, fontWeight: 700, color: INK, margin: "0 0 3px" }}>내 신청 조회</h2>
+      <p style={{ fontSize: 12.5, color: MUTED, margin: "0 0 20px" }}>My Application</p>
+
+      <form onSubmit={handleLookup}>
+        <Field kr="접수 번호" en="Reference Code" required hint="접수 완료 화면에서 확인하신 번호입니다." hintEn="Shown on your submission confirmation screen.">
+          <TextInput value={refInput} onChange={(e) => setRefInput(e.target.value)} placeholder="VB2026-XXXXX" />
+        </Field>
+        <Field kr="담당자 이메일" en="Email" required>
+          <TextInput value={emailInput} onChange={(e) => setEmailInput(e.target.value)} placeholder="name@company.com" />
+        </Field>
+        {error && (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", color: LACQUER_DARK, fontSize: 13, marginBottom: 16 }}>
+            <AlertCircle size={15} /> {error}
+          </div>
+        )}
+        <button
+          type="submit"
+          style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, border: "none", background: LACQUER, color: "#FFF9EC", padding: "10px 20px", borderRadius: 4, fontSize: 14, fontWeight: 500, fontFamily: SANS }}
+        >
+          <Search size={15} /> 조회하기 Look up
+        </button>
+      </form>
+
+      {result && (
+        <div style={{ marginTop: 24, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "18px 20px", background: "#FAFAFC" }}>
+          <Row kr="접수 번호" en="Reference" value={refCode(result.id)} mono />
+          <Row kr="행사 구분" en="Fair type" value={TRACKS[result.track] ? `${TRACKS[result.track].kr} / ${TRACKS[result.track].en}` : "-"} />
+          <Row kr="업체명" en="Company" value={result.companyName} />
+          <Row kr="부스 번호" en="Booth" value={result.boothNo} />
+          <Row kr="세션명" en="Session" value={result.sessionTitle} />
+          <Row
+            kr="일시" en="Time"
+            value={`${DAYS.find((d) => d.key === result.day)?.kr} ${result.startTime}–${toHHMM(toMinutes(result.startTime) + result.duration)}`}
+          />
+          <Row
+            kr="상태" en="Status"
+            value={result.status === "confirmed" ? "확정 Confirmed" : result.status === "pending" ? "검토중 Pending" : "반려 Rejected"}
+          />
+          <button
+            onClick={() => startEdit(result)}
+            style={{ marginTop: 16, cursor: "pointer", border: `1px solid ${INK}`, background: "transparent", padding: "9px 16px", borderRadius: 4, fontSize: 13.5, fontFamily: SANS }}
+          >
+            수정하기 Edit this application
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ApplyView({ form, update, submitForm, submitting, submitError, confirmation, setConfirmation, slotOk, overLimit, conflict, startMin, endMin, editingId, startEdit, apps }) {
   const [logoError, setLogoError] = useState("");
   const accent = form.track === "vietedu" ? BLUE : LACQUER;
   const accentDark = form.track === "vietedu" ? BLUE_DARK : LACQUER_DARK;
@@ -888,7 +1166,7 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
         <p style={{ fontSize: 13, color: MUTED, margin: "0 0 16px" }}>Your application has been received.</p>
         <p style={{ fontSize: 14, color: MUTED, marginBottom: 4 }}>담당자 확인 후 최종 시간대가 확정되며, 결과는 기재하신 이메일로 안내드립니다.</p>
         <p style={{ fontSize: 12.5, color: MUTED, marginBottom: 20 }}>The organizer will review and confirm the final time; you'll be notified by email.</p>
-        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "18px 20px", background: "#FFFDF7" }}>
+        <div style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "18px 20px", background: "#F1F4F9" }}>
           <Row kr="접수 번호" en="Reference" value={refCode(confirmation.id)} mono />
           <Row kr="행사 구분" en="Fair type" value={TRACKS[confirmation.track] ? `${TRACKS[confirmation.track].kr} / ${TRACKS[confirmation.track].en}` : "-"} />
           <Row kr="업체명" en="Company" value={confirmation.companyName} />
@@ -910,9 +1188,15 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
 
         <button
           onClick={() => setConfirmation(null)}
-          style={{ marginTop: 20, cursor: "pointer", border: `1px solid ${INK}`, background: "transparent", padding: "9px 16px", borderRadius: 4, fontSize: 13.5, fontFamily: SANS }}
+          style={{ marginTop: 20, marginRight: 10, cursor: "pointer", border: `1px solid ${INK}`, background: "transparent", padding: "9px 16px", borderRadius: 4, fontSize: 13.5, fontFamily: SANS }}
         >
           새 신청서 작성하기 Start a new application
+        </button>
+        <button
+          onClick={() => startEdit(confirmation)}
+          style={{ marginTop: 20, cursor: "pointer", border: "none", background: LACQUER, color: "#FFF9EC", padding: "9px 16px", borderRadius: 4, fontSize: 13.5, fontFamily: SANS }}
+        >
+          수정하기 Edit this application
         </button>
       </section>
     );
@@ -920,21 +1204,21 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
 
   return (
     <section style={{ paddingTop: 28 }}>
-      <div style={{ border: `1px solid ${GOLD}`, borderRadius: 6, padding: "18px 20px", background: PAPER_2, fontSize: 13, color: INK, marginBottom: 28 }}>
+      <div style={{ border: `1px solid ${NOTICE_BORDER}`, borderRadius: 6, padding: "18px 20px", background: PAPER_2, fontSize: 13, color: INK, marginBottom: 28 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 16 }}>
-          <Info size={16} style={{ flexShrink: 0, color: GOLD_DARK }} />
+          <Info size={16} style={{ flexShrink: 0, color: NOTICE_ICON }} />
           <strong style={{ fontSize: 13.5 }}>신청 마감: 2026년 9월 14일 · Deadline: Sep 14, 2026</strong>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <NoticeItem n="1" kr="발표자료는 USB에 저장하여 지참해주세요." en="Bring your slides on a USB drive." />
           <NoticeItem
             n="2"
-            kr={<>세션은 <strong>45분 또는 60분</strong> 중 선택할 수 있으며, 앞뒤 세션과 <strong>15분 간격</strong>이 자동으로 확보됩니다.</>}
-            en={<>Sessions can be <strong>45 or 60 minutes</strong>, and a <strong>15-minute gap</strong> from neighboring sessions is enforced automatically.</>}
+            kr={<>모든 세션은 <strong>45분</strong>이며, 앞뒤 세션과 <strong>15분 간격</strong>이 자동으로 확보됩니다.</>}
+            en={<>Every session is a fixed <strong>45 minutes</strong>, and a <strong>15-minute gap</strong> from neighboring sessions is enforced automatically.</>}
           />
           <NoticeItem n="3" kr="모든 정보는 영문 또는 베트남어로 작성해주세요." en="Please fill in all information in English or Vietnamese." />
           <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-            <span style={{ ...styles.mono, fontSize: 11, color: GOLD_DARK, border: `1px solid ${GOLD_DARK}`, borderRadius: "50%", width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+            <span style={{ ...styles.mono, fontSize: 11, color: NOTICE_ICON, border: `1px solid ${NOTICE_ICON}`, borderRadius: "50%", width: 18, height: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
               4
             </span>
             <div style={{ flex: 1 }}>
@@ -948,6 +1232,16 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
       </div>
 
       <form onSubmit={submitForm}>
+        {editingId && (
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, border: `1px solid ${NOTICE_BORDER}`, background: PAPER_2, borderRadius: 6, padding: "10px 14px", marginBottom: 20, fontSize: 13, color: INK }}>
+            <Info size={15} style={{ color: NOTICE_ICON, flexShrink: 0, marginTop: 1 }} />
+            <div>
+              기존 신청서를 수정하는 중입니다. 제출하면 검토중 상태로 다시 바뀝니다.<br />
+              <span style={{ color: MUTED }}>Editing an existing application — resubmitting will set it back to pending review.</span>
+            </div>
+          </div>
+        )}
+
         <SectionLabel n="00" kr="행사 구분" en="Fair Type" />
         <div style={{ display: "flex", gap: 10, marginBottom: 28 }}>
           {Object.values(TRACKS).map((t) => (
@@ -992,7 +1286,7 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
           </Field>
         </div>
 
-        <div style={{ height: 1, background: "#E4D9BC", margin: "8px 0 28px" }} />
+        <div style={{ height: 1, background: "#D5DAE3", margin: "8px 0 28px" }} />
 
         <SectionLabel n="02" kr="세미나 정보" en="Session Information" />
         <Field kr="세션명 (영문)" en="Session Title (English)" required hint="외부 홍보에 그대로 사용됩니다." hintEn="Used as-is for external promotion.">
@@ -1001,6 +1295,8 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
         <Field kr="세션 소개 (영문)" en="Session Description (English)" required hint="참관객 대상 소개문으로, 영문으로 작성해주세요." hintEn="Visitor-facing description, in English.">
           <TextArea rows={4} value={form.sessionDescription} onChange={(e) => update("sessionDescription", e.target.value)} placeholder="Session description in English" />
         </Field>
+
+        <MiniSchedule apps={apps} selectedDay={form.day} />
 
         <Field kr="희망 날짜" en="Requested Date" required>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -1012,17 +1308,7 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
           </div>
         </Field>
 
-        <Field kr="세션 길이" en="Session Length" required>
-          <div style={{ display: "flex", gap: 8 }}>
-            {DURATIONS.map((d) => (
-              <PillButton key={d} active={form.duration === d} onClick={() => update("duration", d)} accent={accent}>
-                {d}분 <span style={{ opacity: 0.85 }}>· {d} min</span>
-              </PillButton>
-            ))}
-          </div>
-        </Field>
-
-        <Field kr="시작 시간" en="Start Time" required hint="세션 길이를 초과해 배정되면 다음 신청서에서 자동으로 걸러집니다." hintEn="Any conflicting overlap is caught automatically.">
+        <Field kr="시작 시간" en="Start Time" required hint="모든 세션은 45분 고정입니다." hintEn="All sessions are a fixed 45 minutes.">
           <Select value={form.startTime} onChange={(e) => update("startTime", e.target.value)} style={{ maxWidth: 180 }}>
             {STANDARD_START_TIMES.map((s) => <option key={s} value={s}>{s}</option>)}
           </Select>
@@ -1030,17 +1316,30 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
 
         <div
           style={{
-            display: "flex", alignItems: "center", gap: 8, fontSize: 13, padding: "10px 14px", borderRadius: 4, marginBottom: 24,
+            display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13, padding: "10px 14px", borderRadius: 4, marginBottom: 24,
             background: slotOk ? "#EAF3EE" : "#FBEAEA", color: slotOk ? "#1F4E44" : LACQUER_DARK,
             border: `1px solid ${slotOk ? "#BFDDCF" : "#EFC3C3"}`,
           }}
         >
-          {slotOk ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
-          {overLimit
-            ? "운영 시간(17:30)을 초과합니다. Exceeds closing time (17:30)."
-            : conflict
-            ? `다른 세션과 겹치거나 15분 간격이 부족합니다 (${conflict.companyName}, ${conflict.startTime} 시작). Overlaps ${conflict.companyName} at ${conflict.startTime} or violates the 15-min gap.`
-            : `${toHHMM(startMin)}–${toHHMM(endMin)} · 신청 가능 Available`}
+          {slotOk ? <CheckCircle2 size={15} style={{ marginTop: 1, flexShrink: 0 }} /> : <AlertCircle size={15} style={{ marginTop: 1, flexShrink: 0 }} />}
+          <span>
+            {overLimit ? (
+              <>
+                운영 시간(17:45)을 초과합니다.<br />
+                <span style={{ opacity: 0.85 }}>Exceeds closing time (17:45).</span>
+              </>
+            ) : conflict ? (
+              <>
+                다른 세션과 겹치거나 15분 간격이 부족합니다 ({conflict.companyName}, {conflict.startTime} 시작).<br />
+                <span style={{ opacity: 0.85 }}>Overlaps {conflict.companyName} at {conflict.startTime} or violates the 15-min gap.</span>
+              </>
+            ) : (
+              <>
+                {toHHMM(startMin)}–{toHHMM(endMin)} · 신청 가능<br />
+                <span style={{ opacity: 0.85 }}>Available</span>
+              </>
+            )}
+          </span>
         </div>
 
         <Field kr="기업 로고" en="Company Logo" hint="PNG/JPG, 1.5MB 이하 권장." hintEn="PNG/JPG recommended, up to 1.5MB.">
@@ -1066,11 +1365,11 @@ function ApplyView({ form, update, submitForm, submitting, submitError, confirma
           type="submit" disabled={submitting}
           style={{ marginTop: 20, cursor: submitting ? "default" : "pointer", border: "none", background: accent, color: "#FFF9EC", padding: "12px 22px", borderRadius: 4, fontSize: 14.5, fontWeight: 500, fontFamily: SANS, opacity: submitting ? 0.7 : 1 }}
         >
-          {submitting ? "제출 중… Submitting…" : "신청서 제출 Submit Application"}
+          {submitting ? "제출 중… Submitting…" : editingId ? "수정 완료 Update Application" : "신청서 제출 Submit Application"}
         </button>
 
-        <div style={{ marginTop: 24, display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${GOLD}`, borderRadius: 6, padding: "14px 16px", background: PAPER_2 }}>
-          <AlertCircle size={16} style={{ marginTop: 1, flexShrink: 0, color: GOLD_DARK }} />
+        <div style={{ marginTop: 24, display: "flex", gap: 10, alignItems: "flex-start", border: `1px solid ${NOTICE_BORDER}`, borderRadius: 6, padding: "14px 16px", background: PAPER_2 }}>
+          <AlertCircle size={16} style={{ marginTop: 1, flexShrink: 0, color: NOTICE_ICON }} />
           <div style={{ fontSize: 12.5, color: INK, lineHeight: 1.8 }}>
             주최사에서도 홍보를 진행하나, 참가사 자체 홍보를 병행해주셔야 효과적인 관람객 유입이 가능합니다.<br />
             <span style={{ color: MUTED }}>The organizer will also promote the event, but participating companies should carry out their own promotion as well for effective visitor turnout.</span>
@@ -1109,10 +1408,14 @@ function AdminGate({ passInput, setPassInput, passError, onSubmit }) {
 
 function AdminView({
   apps, allApps, statusFilter, setStatusFilter, setAppStatus, blockForm, setBlockForm, blockError, addSpecialBlock,
-  blockedForm, setBlockedForm, blockedError, addBlockedTime, deleteApp, changeAccessCode,
+  blockedForm, setBlockedForm, blockedError, addBlockedTime, deleteApp, changeAccessCode, updateAppTime,
 }) {
   const [adminTab, setAdminTab] = useState("applications");
   const [confirmedOnly, setConfirmedOnly] = useState(true);
+  const [editingTimeId, setEditingTimeId] = useState(null);
+  const [editDay, setEditDay] = useState("");
+  const [editStart, setEditStart] = useState("");
+  const [logoDownloadMsg, setLogoDownloadMsg] = useState("");
   const filters = [
     { key: "all", kr: "전체", en: "All" },
     { key: "pending", kr: "검토중", en: "Pending" },
@@ -1128,6 +1431,32 @@ function AdminView({
   const blockedItems = (allApps || [])
     .filter((a) => a.isBlocked)
     .sort((a, b) => (a.day === b.day ? toMinutes(a.startTime) - toMinutes(b.startTime) : a.day.localeCompare(b.day)));
+
+  const realApps = (allApps || []).filter((a) => !a.isBlocked && !a.isSpecial);
+  const stats = {
+    total: realApps.length,
+    pending: realApps.filter((a) => a.status === "pending").length,
+    confirmed: realApps.filter((a) => a.status === "confirmed").length,
+    rejected: realApps.filter((a) => a.status === "rejected").length,
+  };
+  const now = new Date();
+  const daysUntilDeadline = Math.ceil((APPLICATION_DEADLINE - now) / 86400000);
+  const stalePending = realApps.filter(
+    (a) => a.status === "pending" && (now - new Date(a.submittedAt)) / 86400000 >= STALE_PENDING_DAYS
+  );
+
+  function beginTimeEdit(a) {
+    setEditingTimeId(a.id);
+    setEditDay(a.day);
+    setEditStart(a.startTime);
+  }
+  function cancelTimeEdit() {
+    setEditingTimeId(null);
+  }
+  function saveTimeEdit(a) {
+    updateAppTime(a.id, editDay, editStart);
+    setEditingTimeId(null);
+  }
   return (
     <section style={{ paddingTop: 28 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
@@ -1216,7 +1545,7 @@ function AdminView({
                   key={a.id}
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
-                    border: `1px solid ${BORDER}`, borderRadius: 6, padding: "10px 14px", background: "#FFFDF7",
+                    border: `1px solid ${BORDER}`, borderRadius: 6, padding: "10px 14px", background: "#F1F4F9",
                   }}
                 >
                   <div style={{ fontSize: 12.5, color: INK }}>
@@ -1240,8 +1569,8 @@ function AdminView({
           <h3 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 2px" }}>장시간·특별 일정 등록</h3>
           <p style={{ fontSize: 11.5, color: MUTED, margin: "0 0 12px" }}>Register a long-form / special program</p>
           <p style={{ fontSize: 12.5, color: MUTED, margin: "0 0 14px" }}>
-            9:00–15:00처럼 60분을 넘는 행사·축제·부스 프로그램은 여기서 직접 등록하세요. (15분 간격 규칙은 적용되지 않고, 겹치는 일정만 막습니다.)<br />
-            For programs longer than 60 minutes (e.g. 9:00–15:00), register them here directly. The 15-minute gap rule does not apply — only overlaps are blocked.
+            9:00–15:00처럼 45분을 넘는 행사·축제·부스 프로그램은 여기서 직접 등록하세요. (15분 간격 규칙은 적용되지 않고, 겹치는 일정만 막습니다.)<br />
+            For programs longer than 45 minutes (e.g. 9:00–15:00), register them here directly. The 15-minute gap rule does not apply — only overlaps are blocked.
           </p>
 
           <div style={{ marginBottom: 12 }}>
@@ -1292,7 +1621,41 @@ function AdminView({
 
       {adminTab === "applications" && (
         <>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "14px 16px", marginBottom: 18, background: "#FFFDF7" }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+            {[
+              ["전체", "Total", stats.total, INK],
+              ["검토중", "Pending", stats.pending, "#8C6A25"],
+              ["확정", "Confirmed", stats.confirmed, "#1F4E44"],
+              ["반려", "Rejected", stats.rejected, LACQUER],
+            ].map(([kr, en, val, color]) => (
+              <div key={kr} style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "10px 18px", minWidth: 96, background: "#FAFAFC" }}>
+                <div style={{ fontSize: 22, fontWeight: 700, color }}>{val}</div>
+                <div style={{ fontSize: 11, color: MUTED }}>{kr} <span>{en}</span></div>
+              </div>
+            ))}
+          </div>
+
+          {(daysUntilDeadline <= 14 || stalePending.length > 0) && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
+              {daysUntilDeadline < 0 ? (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", border: `1px solid #EFC3C3`, background: "#FBEAEA", borderRadius: 6, padding: "10px 14px", fontSize: 13, color: LACQUER_DARK }}>
+                  <AlertCircle size={15} /> 신청 마감일(2026년 9월 14일)이 지났습니다. <span style={{ opacity: 0.85 }}>The application deadline (Sep 14, 2026) has passed.</span>
+                </div>
+              ) : daysUntilDeadline <= 14 ? (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", border: `1px solid ${NOTICE_BORDER}`, background: PAPER_2, borderRadius: 6, padding: "10px 14px", fontSize: 13, color: INK }}>
+                  <Info size={15} style={{ color: NOTICE_ICON, flexShrink: 0 }} /> 신청 마감까지 D-{daysUntilDeadline}일 남았습니다. <span style={{ color: MUTED }}>{daysUntilDeadline} days left until the deadline.</span>
+                </div>
+              ) : null}
+              {stalePending.length > 0 && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", border: `1px solid #EFC3C3`, background: "#FBEAEA", borderRadius: 6, padding: "10px 14px", fontSize: 13, color: LACQUER_DARK }}>
+                  <AlertCircle size={15} /> {STALE_PENDING_DAYS}일 이상 검토중인 신청이 {stalePending.length}건 있습니다.
+                  <span style={{ opacity: 0.85 }}> {stalePending.length} application{stalePending.length > 1 ? "s" : ""} pending review for {STALE_PENDING_DAYS}+ days.</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "14px 16px", marginBottom: 12, background: "#F1F4F9" }}>
             <div>
               <div style={{ fontSize: 13.5, fontWeight: 600, color: INK }}>스케줄 다운로드 <span style={{ fontWeight: 400, color: MUTED }}>Export schedule</span></div>
               <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: MUTED, marginTop: 6, cursor: "pointer" }}>
@@ -1308,6 +1671,28 @@ function AdminView({
             </button>
           </div>
 
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12, border: `1px solid ${BORDER}`, borderRadius: 6, padding: "14px 16px", marginBottom: 18, background: "#F1F4F9" }}>
+            <div>
+              <div style={{ fontSize: 13.5, fontWeight: 600, color: INK }}>기업 로고 일괄 다운로드 <span style={{ fontWeight: 400, color: MUTED }}>Bulk download logos</span></div>
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
+                로고가 첨부된 신청서를 전부 순서대로 다운로드합니다. 브라우저가 "여러 파일 다운로드 허용"을 물어보면 허용해주세요.<br />
+                Downloads every uploaded logo one after another. Allow multiple downloads if your browser asks.
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                const count = downloadAllLogos(allApps);
+                setLogoDownloadMsg(count === 0 ? "다운로드할 로고가 없습니다. No logos to download." : `${count}개 로고 다운로드 시작 Downloading ${count} logos`);
+              }}
+              style={{ cursor: "pointer", display: "flex", alignItems: "center", gap: 6, border: "none", background: GOLD_DARK, color: "#FFF9EC", padding: "9px 16px", borderRadius: 4, fontSize: 13, fontFamily: SANS, flexShrink: 0 }}
+            >
+              <Download size={14} /> 로고 전체 다운로드 Download all
+            </button>
+          </div>
+          {logoDownloadMsg && (
+            <div style={{ fontSize: 12, color: MUTED, marginTop: -8, marginBottom: 18 }}>{logoDownloadMsg}</div>
+          )}
+
           <div style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}>
             {filters.map((f) => (
               <PillButton key={f.key} active={statusFilter === f.key} onClick={() => setStatusFilter(f.key)} accent={INK}>
@@ -1321,43 +1706,87 @@ function AdminView({
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {apps.map((a) => (
-                <div key={a.id} style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "14px 16px", background: "#FFFDF7" }}>
+                <div key={a.id} style={{ border: `1px solid ${BORDER}`, borderRadius: 6, padding: "14px 16px", background: "#F1F4F9" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
-                    <div>
-                      <div style={{ fontSize: 15, fontWeight: 600 }}>{a.sessionTitle}</div>
-                      <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
-                        {a.companyName} {a.boothNo && `· 부스 ${a.boothNo}`}
+                    <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                      {a.companyLogo && (
+                        <img
+                          src={a.companyLogo} alt="company logo"
+                          style={{ width: 44, height: 44, objectFit: "contain", borderRadius: 4, border: `1px solid ${BORDER}`, background: "#fff", flexShrink: 0 }}
+                        />
+                      )}
+                      <div>
+                        <div style={{ fontSize: 15, fontWeight: 600 }}>{a.sessionTitle}</div>
+                        <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>
+                          {a.companyName} {a.boothNo && `· 부스 ${a.boothNo}`}
+                        </div>
+                        {a.track && (
+                          <div style={{ fontSize: 11.5, color: TRACKS[a.track].text, marginTop: 3, fontWeight: 500 }}>
+                            {TRACKS[a.track].kr} · {TRACKS[a.track].en}
+                          </div>
+                        )}
+                        {a.isBlocked && (
+                          <div style={{ fontSize: 11.5, color: "#3F434C", marginTop: 3, fontWeight: 500 }}>
+                            ✕ 이용 불가 Unavailable
+                          </div>
+                        )}
+                        {a.companyLogo && (
+                          <button
+                            onClick={() => downloadDataUrl(a.companyLogo, `${(a.companyName || "logo").replace(/[^\w.-]+/g, "_")}.${logoExtension(a.companyLogo)}`)}
+                            style={{ cursor: "pointer", border: "none", background: "none", color: LACQUER, fontSize: 11.5, padding: 0, marginTop: 4, textDecoration: "underline" }}
+                          >
+                            로고 다운로드 Download logo
+                          </button>
+                        )}
                       </div>
-                      {a.track && (
-                        <div style={{ fontSize: 11.5, color: TRACKS[a.track].text, marginTop: 3, fontWeight: 500 }}>
-                          {TRACKS[a.track].kr} · {TRACKS[a.track].en}
-                        </div>
-                      )}
-                      {a.isBlocked && (
-                        <div style={{ fontSize: 11.5, color: "#5C574B", marginTop: 3, fontWeight: 500 }}>
-                          ✕ 이용 불가 Unavailable
-                        </div>
-                      )}
                     </div>
                     <Badge tone={a.status === "confirmed" ? "confirmed" : a.status === "pending" ? "pending" : "empty"}>
                       {a.status === "confirmed" ? "확정 Confirmed" : a.status === "pending" ? "검토중 Pending" : "반려 Rejected"}
                     </Badge>
                   </div>
 
-                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12.5, color: INK, margin: "10px 0" }}>
-                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                      <Calendar size={13} /> {DAYS.find((d) => d.key === a.day)?.kr} {a.startTime} ({a.duration}분)
-                    </span>
-                    {!a.isSpecial && (
-                      <>
-                        <span style={{ display: "flex", alignItems: "center", gap: 4 }}><User size={13} /> {a.picName} {a.picPosition && `(${a.picPosition})`}</span>
-                        <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Phone size={13} /> {COUNTRY_CODES[a.phoneCountry]?.code} {a.picPhone}</span>
-                        <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Mail size={13} /> {a.picEmail}</span>
-                      </>
-                    )}
-                  </div>
+                  {editingTimeId === a.id ? (
+                    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", margin: "10px 0", padding: "10px 12px", background: PAPER_2, borderRadius: 4 }}>
+                      <label>
+                        <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>Date</span>
+                        <Select value={editDay} onChange={(e) => setEditDay(e.target.value)} style={{ width: 150 }}>
+                          {DAYS.map((d) => <option key={d.key} value={d.key}>{d.en}</option>)}
+                        </Select>
+                      </label>
+                      <label>
+                        <span style={{ display: "block", fontSize: 11, marginBottom: 3, color: MUTED }}>시작 Start</span>
+                        <Select value={editStart} onChange={(e) => setEditStart(e.target.value)} style={{ width: 120 }}>
+                          {(a.isSpecial ? FINE_SLOTS : STANDARD_START_TIMES).map((s) => <option key={s} value={s}>{s}</option>)}
+                        </Select>
+                      </label>
+                      <button onClick={() => saveTimeEdit(a)} style={miniBtn("#1F4E44")}>
+                        <CheckCircle2 size={13} /> 저장 Save
+                      </button>
+                      <button onClick={cancelTimeEdit} style={miniBtn(MUTED)}>
+                        <X size={13} /> 취소 Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12.5, color: INK, margin: "10px 0" }}>
+                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <Calendar size={13} /> {DAYS.find((d) => d.key === a.day)?.kr} {a.startTime} ({a.duration}분)
+                      </span>
+                      {!a.isSpecial && (
+                        <>
+                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><User size={13} /> {a.picName} {a.picPosition && `(${a.picPosition})`}</span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Phone size={13} /> {COUNTRY_CODES[a.phoneCountry]?.code} {a.picPhone}</span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><Mail size={13} /> {a.picEmail}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
 
-                  <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {editingTimeId !== a.id && (
+                      <button onClick={() => beginTimeEdit(a)} style={miniBtn(GOLD_DARK)}>
+                        <Calendar size={13} /> 시간 수정 Edit time
+                      </button>
+                    )}
                     {a.status !== "confirmed" && (
                       <button onClick={() => setAppStatus(a.id, "confirmed")} style={miniBtn("#1F4E44")}>
                         <CheckCircle2 size={13} /> 확정 Confirm
